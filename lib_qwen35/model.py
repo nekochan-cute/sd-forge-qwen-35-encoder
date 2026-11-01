@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 # ============================================================================
 
 def rms_norm(x: torch.Tensor, weight: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    """RMSNorm: x * weight / rms(x). Compatible replacement for comfy.ldm.common_dit.rms_norm."""
+    """Apply RMSNorm even when the small scale tensor is offloaded to CPU."""
+    weight = weight.to(device=x.device, dtype=x.dtype)
     return torch.nn.functional.rms_norm(x, weight.shape, weight, eps)
 
 
@@ -77,7 +78,7 @@ class BiasAdd(nn.Module):
         self.bias = nn.Parameter(torch.zeros(dim, device=device, dtype=dtype))
 
     def forward(self, x):
-        return x + self.bias
+        return x + self.bias.to(device=x.device, dtype=x.dtype)
 
 
 class SSMBlock(nn.Module):
