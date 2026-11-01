@@ -198,10 +198,19 @@ class Qwen35EncoderForForge(scripts.Script):
 
         log(f"[Qwen3.5-Anima] Detected dtype: {dtype}")
 
-        # Create model
+        # Forge may keep some encoder layers on CPU when VRAM is limited.
+        # Use its manual-cast operations so offloaded Linear, Conv1d and
+        # Embedding weights are transferred to the input device on demand.
+        from backend import memory_management
+        from backend.operations import using_forge_operations
         from lib_qwen35.model import Qwen35HybridModel
 
-        model = Qwen35HybridModel(device="cpu", dtype=dtype)
+        with using_forge_operations(
+            device=memory_management.cpu,
+            dtype=dtype,
+            manual_cast_enabled=True,
+        ):
+            model = Qwen35HybridModel(device="cpu", dtype=dtype)
 
         # Load weights
         missing, unexpected = model.load_state_dict(sd, strict=False)
