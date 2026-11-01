@@ -53,13 +53,15 @@ class Qwen35AnimaTextProcessingEngine:
         original_text_encoder: The original Qwen3-0.6B model (for its LLM adapter)
     """
 
-    def __init__(self, text_encoder, qwen_tokenizer, t5_tokenizer, original_text_encoder=None):
+    def __init__(self, text_encoder, qwen_tokenizer, t5_tokenizer,
+                 original_text_encoder=None, native_engine=None):
         super().__init__()
 
         self.text_encoder = text_encoder  # Our Qwen3.5 4B hybrid model
         self.qwen_tokenizer = qwen_tokenizer  # Qwen3.5 tokenizer (vocab=248320)
         self.t5_tokenizer = t5_tokenizer  # T5 tokenizer from original Anima
         self.original_text_encoder = original_text_encoder  # For LLM adapter
+        self.native_engine = native_engine  # Forge Neo's Qwen06Engine (or legacy engine)
 
         # Qwen3.5 pad token (same as Qwen3)
         self.id_pad = 151643
@@ -83,7 +85,16 @@ class Qwen35AnimaTextProcessingEngine:
         Follows the exact same pattern as AnimaTextProcessingEngine.tokenize_line().
         """
         parsed = parsing.parse_prompt_attention(line, self.emphasis.name)
-        qwen_tokenized, t5_tokenized = self.tokenize([text for text, _ in parsed])
+        segments = [text for text, _ in parsed]
+        qwen_tokenized = self.qwen_tokenizer(
+            segments, truncation=False, add_special_tokens=False
+        )["input_ids"]
+        # New Forge Neo supplies its own SDTokenizer. Defer T5 tokenization to
+        # that engine instead of duplicating the older tokenization behavior.
+        t5_tokenized = (
+            self.t5_tokenizer(segments, truncation=False, add_special_tokens=False)["input_ids"]
+            if self.native_engine is None else []
+        )
 
         chunks = []
         chunk = PromptChunk()
@@ -123,34 +134,50 @@ class Qwen35AnimaTextProcessingEngine:
         return chunks
 
     def __call__(self, texts: "SdConditioning"):
-        """Main entry point — matches AnimaTextProcessingEngine.__call__() exactly."""
+        """Encode prompts using Qwen3.5 with Forge Neo-compatible T5 weights."""
         zs = []
+        # Cache the whole prompt's token metadata, not just Qwen embeddings:
+        # repeated prompts must never inherit the preceding prompt's T5 tokens.
         cache = {}
 
         self.emphasis = emphasis.get_current_option(opts.emphasis)()
+        disable_weights = self.emphasis.name == "None"
+        ignore_weights = self.emphasis.name == "Ignore"
 
         for line in texts:
-            if line in cache:
-                z = cache[line]
-            else:
+            if line not in cache:
                 chunks: list[PromptChunk] = self.tokenize_line(line)
-                assert len(chunks) == 1
+                if len(chunks) != 1:
+                    raise ValueError("Qwen3.5-Anima expects one prompt chunk")
 
-                for chunk in chunks:
-                    tokens = chunk.qwen_tokens
-                    multipliers = chunk.qwen_multipliers
+                chunk = chunks[0]
+                z: torch.Tensor = self.process_tokens(
+                    [chunk.qwen_tokens], [chunk.qwen_multipliers]
+                )[0]
 
-                    z: torch.Tensor = self.process_tokens([tokens], [multipliers])[0]
+                if self.native_engine is not None and hasattr(
+                    self.native_engine, "t5_tokenizer"
+                ) and hasattr(self.native_engine.t5_tokenizer, "tokenize_with_weights"):
+                    # Match Qwen06Engine's T5 token IDs and weighted emphasis.
+                    t5_chunks = self.native_engine.t5_tokenizer.tokenize_with_weights(
+                        line, disable_weights=disable_weights
+                    )
+                    t5_tokens = torch.tensor(
+                        [token[0] for token in t5_chunks[0]], dtype=torch.int
+                    )
+                    t5_weights = torch.tensor(
+                        [1.0 if ignore_weights else token[1] for token in t5_chunks[0]],
+                        dtype=torch.float32,
+                    )
+                else:
+                    # Old Forge Neo engine: retain the original tokenization.
+                    t5_tokens = torch.tensor(chunk.t5_tokens, dtype=torch.int)
+                    t5_weights = torch.tensor(chunk.t5_multipliers, dtype=torch.float32)
 
-                cache[line] = z
+                cache[line] = (z, t5_tokens, t5_weights)
 
-            zs.append(
-                self.anima_preprocess(
-                    z,
-                    torch.tensor(chunk.t5_tokens, dtype=torch.int),
-                    torch.tensor(chunk.t5_multipliers),
-                )
-            )
+            z, t5_tokens, t5_weights = cache[line]
+            zs.append(self.anima_preprocess(z, t5_tokens, t5_weights))
 
         return zs
 
