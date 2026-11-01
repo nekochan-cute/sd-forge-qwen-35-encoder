@@ -268,8 +268,11 @@ class Qwen35EncoderForForge(scripts.Script):
         SDP.cached_c = [None, None, None]
         SDP.cached_uc = [None, None, None]
 
-        # Check if the current model is Anima
-        if not hasattr(p.sd_model, 'text_processing_engine_anima'):
+        # Forge Neo renamed this attribute in October 2026. Support both APIs.
+        native_engine = getattr(p.sd_model, "text_processing_engine_qwen", None)
+        if native_engine is None:
+            native_engine = getattr(p.sd_model, "text_processing_engine_anima", None)
+        if native_engine is None:
             log("[Qwen3.5-Anima] Current model does not appear to be Anima. Skipping.")
             return
 
@@ -313,6 +316,7 @@ class Qwen35EncoderForForge(scripts.Script):
             qwen_tokenizer=qwen35_tokenizer,
             t5_tokenizer=original_t5_tokenizer,
             original_text_encoder=original_text_encoder,
+            native_engine=native_engine,
         )
 
         sd_model = p.sd_model
@@ -330,6 +334,12 @@ class Qwen35EncoderForForge(scripts.Script):
             # Load our Qwen3.5 model
             memory_management.load_model_gpu(qwen35_clip.patcher)
             result = qwen35_engine(prompt)
+            for index, conditioning in enumerate(result):
+                if not torch.isfinite(conditioning).all():
+                    raise FloatingPointError(
+                        f"[Qwen3.5-Anima] Non-finite text conditioning for prompt {index}; "
+                        "check Qwen3.5 weights, encoder precision, and alignment settings."
+                    )
             log(f"[Qwen3.5-Anima] Conditioning computed: {len(result)} result(s), shape={result[0].shape if result else 'empty'}")
             return result
 

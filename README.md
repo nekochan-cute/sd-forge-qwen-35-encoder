@@ -37,7 +37,7 @@ All model files are available at: **[lylogummy/anima2b-qwen-3.5-4b](https://hugg
 
 ## Usage
 
-1. Load an **Anima 2B** checkpoint in Forge Neo
+1. Load a compatible **Anima** checkpoint in Forge Neo
 2. Keep **`qwen_3_06b_base.safetensors`** selected in the top VAE / Text Encoder dropdown — the LLM adapter on the 0.6B model is still needed
 3. In the generation tab, expand **"Qwen3.5 Text Encoder (Anima)"** and check the enable box
 4. Select **`qwen35_4b.safetensors`** in the extension's Model File dropdown
@@ -53,6 +53,19 @@ All model files are available at: **[lylogummy/anima2b-qwen-3.5-4b](https://hugg
 | Alignment Strength | 0.5 |
 | Use Calibration | OFF |
 | Output Scale | 1.0 |
+
+### Forge Neo Qwen06Engine compatibility
+
+Forge Neo's October 2026 text-processing rewrite renamed
+`text_processing_engine_anima` to `text_processing_engine_qwen`.
+This fork recognizes both names and uses the loaded native engine's T5 token
+weights when available. It also preserves token metadata when a prompt repeats,
+and reports non-finite text conditioning before it can silently propagate.
+
+Keep `qwen_3_06b_base.safetensors` in the normal text encoder selection: the
+original Anima adapter is still required. Model recognition alone does **not**
+guarantee an absence of NaNs during image sampling; test first with the stock
+Qwen3 0.6B encoder if sampling still produces NaNs. Compatibility and sampling stability still require local validation.
 
 ## Settings Reference
 
